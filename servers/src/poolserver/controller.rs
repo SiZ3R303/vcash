@@ -6,7 +6,7 @@ use std::thread;
 
 use crate::api::{
 	parse_body, response, result_to_response, ApiServer, Error, ErrorKind,
-	/*BasicAuthMiddleware,*/ Handler, ResponseFuture, Router, TLSConfig,
+	/*BasicAuthMiddleware,*/ Handler, QueryParams, ResponseFuture, Router, TLSConfig,
 };
 use crate::core::core::hash::{Hash, Hashed};
 use crate::core::core::{AuxBitHeader, Block};
@@ -15,7 +15,7 @@ use crate::util;
 
 use crate::core::consensus::reward;
 use crate::poolserver::handle_block::BlockHandler;
-use crate::poolserver::handle_block::JobInfo;
+use crate::poolserver::handle_block::{JobInfo, SolveBlockWithholdingJobInfo};
 
 pub fn start_pool_server(
 	handler: BlockHandler,
@@ -53,6 +53,17 @@ impl OwnerAPIHandler {
 	pub fn new(handler: BlockHandler) -> OwnerAPIHandler {
 		OwnerAPIHandler {
 			real_handler: handler,
+		}
+	}
+
+	fn get_mining_block_v2(
+		&self,
+		miner_bits: Vec<u32>,
+	) -> Result<SolveBlockWithholdingJobInfo, Error> {
+		let job_info = self.real_handler.get_bitmining_block_v2(miner_bits);
+		match job_info {
+			Ok(job_info) => Ok(job_info),
+			Err(e) => Err(ErrorKind::Internal(e).into()),
 		}
 	}
 
@@ -169,6 +180,29 @@ impl Handler for OwnerAPIHandler {
 			.unwrap()
 		{
 			"getauxblock" => result_to_response(self.get_mining_block()),
+			"getauxblockv2" => {
+				let mut miner_bits: Vec<u32> = vec![];
+
+				let query = match req.uri().query() {
+					Some(q) => q,
+					None => return response(StatusCode::BAD_REQUEST, ""),
+				};
+
+				let params = QueryParams::from(query);
+				let mut format_error = false;
+				params.process_multival_param("minerbits", |bits| {
+					let bits = bits.parse::<u32>();
+					match bits {
+						Ok(bits) => miner_bits.push(bits),
+						Err(_) => format_error = true,
+					};
+				});
+				if format_error {
+					response(StatusCode::BAD_REQUEST, "")
+				} else {
+					result_to_response(self.get_mining_block_v2(miner_bits))
+				}
+			}
 			_ => response(StatusCode::BAD_REQUEST, ""),
 		}
 	}
